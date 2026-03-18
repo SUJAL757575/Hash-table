@@ -1,205 +1,73 @@
 import java.util.*;
+import java.util.concurrent.*;
 
 public class hashtable {
 
-    // username -> userId
-    private Map<String, Integer> usernameMap;
+    // productId -> stock
+    private ConcurrentHashMap<String, Integer> stockMap;
 
-    // username -> attempt count
-    private Map<String, Integer> attemptCount;
+    // productId -> waiting list (FIFO)
+    private ConcurrentHashMap<String, Queue<Integer>> waitingList;
 
     public hashtable() {
-        usernameMap = new HashMap<>();
-        attemptCount = new HashMap<>();
+        stockMap = new ConcurrentHashMap<>();
+        waitingList = new ConcurrentHashMap<>();
     }
 
-    // Register a username
-    public boolean register(String username, int userId) {
-        username = username.toLowerCase();
-
-        if (usernameMap.containsKey(username)) {
-            return false;
-        }
-
-        usernameMap.put(username, userId);
-        return true;
+    // Add product with stock
+    public void addProduct(String productId, int stock) {
+        stockMap.put(productId, stock);
+        waitingList.put(productId, new ConcurrentLinkedQueue<>());
     }
 
-    // Check availability (O(1))
-    public boolean checkAvailability(String username) {
-        username = username.toLowerCase();
-
-        // Track attempts
-        attemptCount.put(username, attemptCount.getOrDefault(username, 0) + 1);
-
-        return !usernameMap.containsKey(username);
+    // Check stock (O(1))
+    public int checkStock(String productId) {
+        return stockMap.getOrDefault(productId, 0);
     }
 
-    // Suggest alternatives
-    public List<String> suggestAlternatives(String username) {
-        username = username.toLowerCase();
-        List<String> suggestions = new ArrayList<>();
+    // Purchase item (thread-safe, prevents overselling)
+    public String purchaseItem(String productId, int userId) {
 
-        // Add numbers
-        for (int i = 1; i <= 5; i++) {
-            String newName = username + i;
-            if (!usernameMap.containsKey(newName)) {
-                suggestions.add(newName);
+        // Lock per product
+        synchronized (productId.intern()) {
+
+            int stock = stockMap.getOrDefault(productId, 0);
+
+            if (stock > 0) {
+                stockMap.put(productId, stock - 1);
+                return "Success, remaining stock: " + (stock - 1);
+            } else {
+                Queue<Integer> queue = waitingList.get(productId);
+                queue.add(userId);
+                return "Added to waiting list, position #" + queue.size();
             }
         }
-
-        // Replace "_" with "."
-        if (username.contains("_")) {
-            String alt = username.replace("_", ".");
-            if (!usernameMap.containsKey(alt)) {
-                suggestions.add(alt);
-            }
-        }
-
-        // Prefix variations
-        String[] prefixes = {"the", "real", "official"};
-        for (String prefix : prefixes) {
-            String newName = prefix + "_" + username;
-            if (!usernameMap.containsKey(newName)) {
-                suggestions.add(newName);
-            }
-        }
-
-        return suggestions;
     }
 
-    // Get most attempted username
-    public String getMostAttempted() {
-        if (attemptCount.isEmpty()) return null;
-
-        String maxUser = null;
-        int maxCount = 0;
-
-        for (Map.Entry<String, Integer> entry : attemptCount.entrySet()) {
-            if (entry.getValue() > maxCount) {
-                maxCount = entry.getValue();
-                maxUser = entry.getKey();
-            }
-        }
-
-        return maxUser;
+    // Get waiting list
+    public Queue<Integer> getWaitingList(String productId) {
+        return waitingList.get(productId);
     }
 
     // ------------------- MAIN METHOD -------------------
     public static void main(String[] args) {
-        hashtable checker = new hashtable();
 
-        // Pre-existing users
-        checker.register("john_doe", 101);
-        checker.register("admin", 1);
+        hashtable manager = new hashtable();
 
-        System.out.println(checker.checkAvailability("john_doe"));   // false
-        System.out.println(checker.checkAvailability("jane_smith")); // true
+        manager.addProduct("IPHONE15_256GB", 3);
 
-        System.out.println(checker.suggestAlternatives("john_doe"));
+        System.out.println(manager.checkStock("IPHONE15_256GB"));
+        // → 3
 
-        System.out.println(checker.getMostAttempted());
-    }
-}import java.util.*;
+        System.out.println(manager.purchaseItem("IPHONE15_256GB", 101));
+        System.out.println(manager.purchaseItem("IPHONE15_256GB", 102));
+        System.out.println(manager.purchaseItem("IPHONE15_256GB", 103));
 
-public class hashtable {
+        // Stock खत्म (out of stock)
+        System.out.println(manager.purchaseItem("IPHONE15_256GB", 104));
+        System.out.println(manager.purchaseItem("IPHONE15_256GB", 105));
 
-    // username -> userId
-    private Map<String, Integer> usernameMap;
-
-    // username -> attempt count
-    private Map<String, Integer> attemptCount;
-
-    public hashtable() {
-        usernameMap = new HashMap<>();
-        attemptCount = new HashMap<>();
-    }
-
-    // Register a username
-    public boolean register(String username, int userId) {
-        username = username.toLowerCase();
-
-        if (usernameMap.containsKey(username)) {
-            return false;
-        }
-
-        usernameMap.put(username, userId);
-        return true;
-    }
-
-    // Check availability (O(1))
-    public boolean checkAvailability(String username) {
-        username = username.toLowerCase();
-
-        // Track attempts
-        attemptCount.put(username, attemptCount.getOrDefault(username, 0) + 1);
-
-        return !usernameMap.containsKey(username);
-    }
-
-    // Suggest alternatives
-    public List<String> suggestAlternatives(String username) {
-        username = username.toLowerCase();
-        List<String> suggestions = new ArrayList<>();
-
-        // Add numbers
-        for (int i = 1; i <= 5; i++) {
-            String newName = username + i;
-            if (!usernameMap.containsKey(newName)) {
-                suggestions.add(newName);
-            }
-        }
-
-        // Replace "_" with "."
-        if (username.contains("_")) {
-            String alt = username.replace("_", ".");
-            if (!usernameMap.containsKey(alt)) {
-                suggestions.add(alt);
-            }
-        }
-
-        // Prefix variations
-        String[] prefixes = {"the", "real", "official"};
-        for (String prefix : prefixes) {
-            String newName = prefix + "_" + username;
-            if (!usernameMap.containsKey(newName)) {
-                suggestions.add(newName);
-            }
-        }
-
-        return suggestions;
-    }
-
-    // Get most attempted username
-    public String getMostAttempted() {
-        if (attemptCount.isEmpty()) return null;
-
-        String maxUser = null;
-        int maxCount = 0;
-
-        for (Map.Entry<String, Integer> entry : attemptCount.entrySet()) {
-            if (entry.getValue() > maxCount) {
-                maxCount = entry.getValue();
-                maxUser = entry.getKey();
-            }
-        }
-
-        return maxUser;
-    }
-
-    // ------------------- MAIN METHOD -------------------
-    public static void main(String[] args) {
-        hashtable checker = new hashtable();
-
-        // Pre-existing users
-        checker.register("john_doe", 101);
-        checker.register("admin", 1);
-
-        System.out.println(checker.checkAvailability("john_doe"));   // false
-        System.out.println(checker.checkAvailability("jane_smith")); // true
-
-        System.out.println(checker.suggestAlternatives("john_doe"));
-
-        System.out.println(checker.getMostAttempted());
+        // Waiting list
+        System.out.println(manager.getWaitingList("IPHONE15_256GB"));
     }
 }
