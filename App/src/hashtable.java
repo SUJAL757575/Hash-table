@@ -1,102 +1,99 @@
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
 
 public class hashtable {
 
-    // TokenBucket class
-    static class TokenBucket {
-        private final int maxTokens;
-        private final int refillRatePerHour;
-        private AtomicInteger tokens;
-        private long lastRefillTime;
-
-        public TokenBucket(int maxTokens, int refillRatePerHour) {
-            this.maxTokens = maxTokens;
-            this.refillRatePerHour = refillRatePerHour;
-            this.tokens = new AtomicInteger(maxTokens);
-            this.lastRefillTime = System.currentTimeMillis();
-        }
-
-        public synchronized boolean allowRequest() {
-            refillTokens();
-            if (tokens.get() > 0) {
-                tokens.decrementAndGet();
-                return true;
-            } else {
-                return false;
-            }
-        }
-
-        private void refillTokens() {
-            long now = System.currentTimeMillis();
-            long elapsed = now - lastRefillTime;
-
-            // Refill every hour
-            if (elapsed >= 3600_000) {
-                tokens.set(maxTokens);
-                lastRefillTime = now;
-            }
-        }
-
-        public int remainingTokens() {
-            refillTokens();
-            return tokens.get();
-        }
-
-        public long getResetTime() {
-            refillTokens();
-            return lastRefillTime + 3600_000;
-        }
+    // Trie node class
+    class TrieNode {
+        Map<Character, TrieNode> children = new HashMap<>();
+        boolean isWord = false;
+        String word = null;
+        int frequency = 0;
     }
 
-    // clientId -> TokenBucket
-    private ConcurrentHashMap<String, TokenBucket> clients;
-
-    private final int MAX_REQUESTS = 1000;
+    private TrieNode root;
 
     public hashtable() {
-        clients = new ConcurrentHashMap<>();
+        root = new TrieNode();
     }
 
-    // Check rate limit for client
-    public String checkRateLimit(String clientId) {
-        clients.putIfAbsent(clientId, new TokenBucket(MAX_REQUESTS, MAX_REQUESTS));
-
-        TokenBucket bucket = clients.get(clientId);
-
-        if (bucket.allowRequest()) {
-            return "Allowed (" + bucket.remainingTokens() + " requests remaining)";
-        } else {
-            long retryAfter = (bucket.getResetTime() - System.currentTimeMillis()) / 1000;
-            return "Denied (0 requests remaining, retry after " + retryAfter + "s)";
+    // Add query to trie
+    public void addQuery(String query, int freq) {
+        TrieNode node = root;
+        for (char ch : query.toCharArray()) {
+            node.children.putIfAbsent(ch, new TrieNode());
+            node = node.children.get(ch);
         }
+        node.isWord = true;
+        node.word = query;
+        node.frequency += freq;
     }
 
-    // Get current status
-    public Map<String, Object> getRateLimitStatus(String clientId) {
-        clients.putIfAbsent(clientId, new TokenBucket(MAX_REQUESTS, MAX_REQUESTS));
-        TokenBucket bucket = clients.get(clientId);
+    // Update frequency of an existing query (or add new)
+    public void updateFrequency(String query) {
+        addQuery(query, 1);
+    }
 
-        Map<String, Object> status = new HashMap<>();
-        status.put("used", MAX_REQUESTS - bucket.remainingTokens());
-        status.put("limit", MAX_REQUESTS);
-        status.put("reset", bucket.getResetTime() / 1000); // epoch seconds
-        return status;
+    // Get top K suggestions for prefix
+    public List<String> search(String prefix) {
+        TrieNode node = root;
+        for (char ch : prefix.toCharArray()) {
+            if (!node.children.containsKey(ch)) return new ArrayList<>();
+            node = node.children.get(ch);
+        }
+
+        PriorityQueue<TrieNode> pq = new PriorityQueue<>(
+                (a, b) -> Integer.compare(a.frequency, b.frequency)
+        );
+
+        dfs(node, pq, 10);
+
+        List<String> result = new ArrayList<>();
+        while (!pq.isEmpty()) {
+            result.add(0, pq.poll().word); // reverse order for highest frequency first
+        }
+
+        return result;
+    }
+
+    // DFS to collect words under this node
+    private void dfs(TrieNode node, PriorityQueue<TrieNode> pq, int k) {
+        if (node.isWord) {
+            pq.offer(node);
+            if (pq.size() > k) pq.poll();
+        }
+        for (TrieNode child : node.children.values()) {
+            dfs(child, pq, k);
+        }
     }
 
     // ------------------- MAIN METHOD -------------------
-    public static void main(String[] args) throws InterruptedException {
-        hashtable rateLimiter = new hashtable();
+    public static void main(String[] args) {
+        hashtable autocomplete = new hashtable();
 
-        String client = "abc123";
+        // Preload some queries
+        autocomplete.addQuery("java tutorial", 1234567);
+        autocomplete.addQuery("javascript", 987654);
+        autocomplete.addQuery("java download", 456789);
+        autocomplete.addQuery("java 21 features", 200000);
 
-        // Simulate a few requests
-        System.out.println(rateLimiter.checkRateLimit(client));
-        System.out.println(rateLimiter.checkRateLimit(client));
-        System.out.println(rateLimiter.checkRateLimit(client));
+        System.out.println("Search results for prefix 'jav':");
+        List<String> suggestions = autocomplete.search("jav");
+        int rank = 1;
+        for (String s : suggestions) {
+            System.out.println(rank + ". " + s);
+            rank++;
+        }
 
-        // Show status
-        System.out.println(rateLimiter.getRateLimitStatus(client));
+        // Update frequency
+        autocomplete.updateFrequency("java 21 features");
+        autocomplete.updateFrequency("java 21 features");
+
+        System.out.println("\nAfter updating frequency for 'java 21 features':");
+        suggestions = autocomplete.search("jav");
+        rank = 1;
+        for (String s : suggestions) {
+            System.out.println(rank + ". " + s);
+            rank++;
+        }
     }
 }
