@@ -1,117 +1,109 @@
 import java.util.*;
+import java.util.concurrent.*;
 
 public class hashtable {
 
-    // n-gram -> set of document IDs
-    private Map<String, Set<String>> ngramIndex;
+    // pageUrl -> total visit count
+    private ConcurrentHashMap<String, Integer> pageViews;
 
-    // document -> its n-grams
-    private Map<String, List<String>> documentNgrams;
+    // pageUrl -> set of unique userIds
+    private ConcurrentHashMap<String, Set<String>> uniqueVisitors;
 
-    private int N = 5; // 5-gram
+    // source -> count
+    private ConcurrentHashMap<String, Integer> trafficSources;
+
+    private ScheduledExecutorService scheduler;
 
     public hashtable() {
-        ngramIndex = new HashMap<>();
-        documentNgrams = new HashMap<>();
+        pageViews = new ConcurrentHashMap<>();
+        uniqueVisitors = new ConcurrentHashMap<>();
+        trafficSources = new ConcurrentHashMap<>();
+
+        // Schedule dashboard updates every 5 seconds
+        scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(this::updateDashboard, 5, 5, TimeUnit.SECONDS);
     }
 
-    // Add document to system
-    public void addDocument(String docId, String text) {
-        List<String> ngrams = generateNgrams(text);
-        documentNgrams.put(docId, ngrams);
+    // Event object
+    public static class PageViewEvent {
+        String url;
+        String userId;
+        String source;
 
-        for (String gram : ngrams) {
-            ngramIndex.putIfAbsent(gram, new HashSet<>());
-            ngramIndex.get(gram).add(docId);
-        }
-    }
-
-    // Analyze document for plagiarism
-    public void analyzeDocument(String docId, String text) {
-        List<String> ngrams = generateNgrams(text);
-
-        Map<String, Integer> matchCount = new HashMap<>();
-
-        for (String gram : ngrams) {
-            if (ngramIndex.containsKey(gram)) {
-                for (String existingDoc : ngramIndex.get(gram)) {
-                    matchCount.put(existingDoc,
-                            matchCount.getOrDefault(existingDoc, 0) + 1);
-                }
-            }
-        }
-
-        System.out.println("Analyzing: " + docId);
-        System.out.println("Total n-grams: " + ngrams.size());
-
-        // Find similarity
-        for (String existingDoc : matchCount.keySet()) {
-            int matches = matchCount.get(existingDoc);
-            int total = ngrams.size();
-
-            double similarity = (matches * 100.0) / total;
-
-            System.out.println("Matched with " + existingDoc +
-                    " → " + matches + " n-grams → Similarity: " +
-                    String.format("%.2f", similarity) + "%");
-        }
-
-        // Find most similar
-        String bestMatch = null;
-        int maxMatch = 0;
-
-        for (Map.Entry<String, Integer> entry : matchCount.entrySet()) {
-            if (entry.getValue() > maxMatch) {
-                maxMatch = entry.getValue();
-                bestMatch = entry.getKey();
-            }
-        }
-
-        if (bestMatch != null) {
-            double similarity = (maxMatch * 100.0) / ngrams.size();
-
-            System.out.println("Most similar: " + bestMatch +
-                    " → " + String.format("%.2f", similarity) + "%");
-
-            if (similarity > 50) {
-                System.out.println("⚠ PLAGIARISM DETECTED");
-            }
+        public PageViewEvent(String url, String userId, String source) {
+            this.url = url;
+            this.userId = userId;
+            this.source = source;
         }
     }
 
-    // Generate n-grams
-    private List<String> generateNgrams(String text) {
-        List<String> result = new ArrayList<>();
+    // Process incoming event
+    public void processEvent(PageViewEvent event) {
+        // Update total views
+        pageViews.merge(event.url, 1, Integer::sum);
 
-        String[] words = text.toLowerCase().split("\\s+");
+        // Update unique visitors
+        uniqueVisitors.putIfAbsent(event.url, ConcurrentHashMap.newKeySet());
+        uniqueVisitors.get(event.url).add(event.userId);
 
-        for (int i = 0; i <= words.length - N; i++) {
-            StringBuilder gram = new StringBuilder();
+        // Update traffic source
+        trafficSources.merge(event.source.toLowerCase(), 1, Integer::sum);
+    }
 
-            for (int j = 0; j < N; j++) {
-                gram.append(words[i + j]).append(" ");
-            }
+    // Update dashboard
+    private void updateDashboard() {
+        System.out.println("\n--- DASHBOARD UPDATE ---");
 
-            result.add(gram.toString().trim());
+        // Top 10 pages by views
+        PriorityQueue<Map.Entry<String, Integer>> topPagesPQ =
+                new PriorityQueue<>((a, b) -> b.getValue() - a.getValue());
+
+        topPagesPQ.addAll(pageViews.entrySet());
+
+        System.out.println("Top Pages:");
+        int rank = 1;
+        for (int i = 0; i < 10 && !topPagesPQ.isEmpty(); i++) {
+            Map.Entry<String, Integer> entry = topPagesPQ.poll();
+            String url = entry.getKey();
+            int views = entry.getValue();
+            int uniques = uniqueVisitors.getOrDefault(url, Collections.emptySet()).size();
+
+            System.out.println(rank + ". " + url + " - " + views + " views (" + uniques + " unique)");
+            rank++;
         }
 
-        return result;
+        // Traffic sources percentage
+        int totalTraffic = trafficSources.values().stream().mapToInt(Integer::intValue).sum();
+        System.out.println("\nTraffic Sources:");
+        for (Map.Entry<String, Integer> entry : trafficSources.entrySet()) {
+            double percent = (entry.getValue() * 100.0) / totalTraffic;
+            System.out.println(capitalize(entry.getKey()) + ": " + String.format("%.1f", percent) + "%");
+        }
+    }
+
+    private String capitalize(String str) {
+        if (str.length() == 0) return str;
+        return str.substring(0, 1).toUpperCase() + str.substring(1);
+    }
+
+    // Shutdown scheduler
+    public void shutdown() {
+        scheduler.shutdown();
     }
 
     // ------------------- MAIN METHOD -------------------
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
+        hashtable analytics = new hashtable();
 
-        hashtable detector = new hashtable();
+        // Simulate page view events
+        analytics.processEvent(new PageViewEvent("/article/breaking-news", "user_123", "google"));
+        analytics.processEvent(new PageViewEvent("/article/breaking-news", "user_456", "facebook"));
+        analytics.processEvent(new PageViewEvent("/sports/championship", "user_123", "direct"));
+        analytics.processEvent(new PageViewEvent("/article/breaking-news", "user_123", "google"));
 
-        // Existing documents
-        detector.addDocument("essay_089",
-                "machine learning is a subset of artificial intelligence and data science");
+        // Keep program alive for a few dashboard updates
+        Thread.sleep(12000);
 
-        detector.addDocument("essay_092",
-                "machine learning is a subset of artificial intelligence and data science widely used today");
-
-        // New document
-        detector.analyzeDocument("essay_123",
-                "machine learning is a subset of artificial intelligence and data science");
+        analytics.shutdown();
     }
 }
