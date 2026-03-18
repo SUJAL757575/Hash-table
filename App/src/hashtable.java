@@ -1,73 +1,123 @@
 import java.util.*;
-import java.util.concurrent.*;
 
 public class hashtable {
 
-    // productId -> stock
-    private ConcurrentHashMap<String, Integer> stockMap;
+    // DNS Entry class
+    class DNSEntry {
+        String domain;
+        String ipAddress;
+        long expiryTime;
 
-    // productId -> waiting list (FIFO)
-    private ConcurrentHashMap<String, Queue<Integer>> waitingList;
+        DNSEntry(String domain, String ipAddress, long ttlSeconds) {
+            this.domain = domain;
+            this.ipAddress = ipAddress;
+            this.expiryTime = System.currentTimeMillis() + (ttlSeconds * 1000);
+        }
 
-    public hashtable() {
-        stockMap = new ConcurrentHashMap<>();
-        waitingList = new ConcurrentHashMap<>();
-    }
-
-    // Add product with stock
-    public void addProduct(String productId, int stock) {
-        stockMap.put(productId, stock);
-        waitingList.put(productId, new ConcurrentLinkedQueue<>());
-    }
-
-    // Check stock (O(1))
-    public int checkStock(String productId) {
-        return stockMap.getOrDefault(productId, 0);
-    }
-
-    // Purchase item (thread-safe, prevents overselling)
-    public String purchaseItem(String productId, int userId) {
-
-        // Lock per product
-        synchronized (productId.intern()) {
-
-            int stock = stockMap.getOrDefault(productId, 0);
-
-            if (stock > 0) {
-                stockMap.put(productId, stock - 1);
-                return "Success, remaining stock: " + (stock - 1);
-            } else {
-                Queue<Integer> queue = waitingList.get(productId);
-                queue.add(userId);
-                return "Added to waiting list, position #" + queue.size();
-            }
+        boolean isExpired() {
+            return System.currentTimeMillis() > expiryTime;
         }
     }
 
-    // Get waiting list
-    public Queue<Integer> getWaitingList(String productId) {
-        return waitingList.get(productId);
+    // LRU Cache using LinkedHashMap
+    private LinkedHashMap<String, DNSEntry> cache;
+    private int capacity;
+
+    // Stats
+    private int hits = 0;
+    private int misses = 0;
+
+    public hashtable(int capacity) {
+        this.capacity = capacity;
+
+        cache = new LinkedHashMap<String, DNSEntry>(capacity, 0.75f, true) {
+            protected boolean removeEldestEntry(Map.Entry<String, DNSEntry> eldest) {
+                return size() > hashtable.this.capacity;
+            }
+        };
+
+        // Start cleanup thread
+        startCleanupThread();
+    }
+
+    // Resolve domain
+    public synchronized String resolve(String domain) {
+        long start = System.nanoTime();
+
+        if (cache.containsKey(domain)) {
+            DNSEntry entry = cache.get(domain);
+
+            if (!entry.isExpired()) {
+                hits++;
+                return "Cache HIT → " + entry.ipAddress;
+            } else {
+                cache.remove(domain);
+            }
+        }
+
+        // Cache miss → simulate upstream DNS
+        misses++;
+        String newIP = queryUpstreamDNS(domain);
+
+        // Store with TTL (example: 5 sec)
+        cache.put(domain, new DNSEntry(domain, newIP, 5));
+
+        return "Cache MISS → " + newIP;
+    }
+
+    // Simulated DNS lookup
+    private String queryUpstreamDNS(String domain) {
+        // Dummy IP generator
+        return "192.168.1." + (new Random().nextInt(200) + 1);
+    }
+
+    // Cache stats
+    public String getCacheStats() {
+        int total = hits + misses;
+        double hitRate = total == 0 ? 0 : (hits * 100.0 / total);
+        return "Hit Rate: " + hitRate + "% (Hits: " + hits + ", Misses: " + misses + ")";
+    }
+
+    // Cleanup expired entries periodically
+    private void startCleanupThread() {
+        Thread cleaner = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(2000); // run every 2 sec
+
+                    synchronized (this) {
+                        Iterator<Map.Entry<String, DNSEntry>> it = cache.entrySet().iterator();
+
+                        while (it.hasNext()) {
+                            Map.Entry<String, DNSEntry> entry = it.next();
+                            if (entry.getValue().isExpired()) {
+                                it.remove();
+                            }
+                        }
+                    }
+
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        cleaner.setDaemon(true);
+        cleaner.start();
     }
 
     // ------------------- MAIN METHOD -------------------
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
 
-        hashtable manager = new hashtable();
+        hashtable dnsCache = new hashtable(3);
 
-        manager.addProduct("IPHONE15_256GB", 3);
+        System.out.println(dnsCache.resolve("google.com"));
+        System.out.println(dnsCache.resolve("google.com")); // HIT
 
-        System.out.println(manager.checkStock("IPHONE15_256GB"));
-        // → 3
+        Thread.sleep(6000); // wait for TTL expiry
 
-        System.out.println(manager.purchaseItem("IPHONE15_256GB", 101));
-        System.out.println(manager.purchaseItem("IPHONE15_256GB", 102));
-        System.out.println(manager.purchaseItem("IPHONE15_256GB", 103));
+        System.out.println(dnsCache.resolve("google.com")); // EXPIRED → MISS
 
-        // Stock खत्म (out of stock)
-        System.out.println(manager.purchaseItem("IPHONE15_256GB", 104));
-        System.out.println(manager.purchaseItem("IPHONE15_256GB", 105));
-
-        // Waiting list
-        System.out.println(manager.getWaitingList("IPHONE15_256GB"));
+        System.out.println(dnsCache.getCacheStats());
     }
 }
